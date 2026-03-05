@@ -30,7 +30,7 @@ export interface ChatSession {
 }
 
 export interface Message {
-  id: number;
+  id: string | number;
   chat_session_id: number;
   content: string;
   created_at: string;
@@ -85,5 +85,5 @@ export interface MessageByChatSessionIdResponse {
 }
 
 export interface MessageByChatSessionIdVariables {
-  chat_session_id: number;
+  id: number;
 }

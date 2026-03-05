@@ -18,12 +18,20 @@ import Avatar from "@/components/Avatar";
 import { useQuery } from "@apollo/client/react";
 import { GET_CHATBOT_BY_ID, GET_MESSAGES_BY_CHAT_SESSION_ID } from "@/graphql/queries/queries";
 import Messages from "@/components/Messages";
+import { z } from "zod"
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useForm, Controller } from "react-hook-form"
+import { Field, FieldContent, FieldGroup, FieldLabel } from "@/components/ui/field";
+
+const formSchema = z.object({
+    message: z.string().min(2, "Your Message is too short!"),
+})
 
 
 function ChatbotPage({ params, }: { params: Promise<{ id: string }> }) {
 
     const { id } = use(params)
-
+    const chatbotId = Number(id)
 
     const [name, setName] = useState("");
     const [email, setEmail] = useState("");
@@ -32,21 +40,28 @@ function ChatbotPage({ params, }: { params: Promise<{ id: string }> }) {
     const [loading, setLoading] = useState(false);
     const [messages, setMessages] = useState<Message[]>([]);
 
-    const { data: chatBotData } = useQuery<GetChatbotByIdResponse>(
+    const { data: chatBotData } = useQuery<GetChatbotByIdResponse, MessageByChatSessionIdVariables>(
         GET_CHATBOT_BY_ID,
         {
-            variables: { id }
+            variables: { id: chatbotId },
+            skip: !chatbotId
         }
     )
 
+    const form = useForm<z.infer<typeof formSchema>>({
+        resolver: zodResolver(formSchema),
+        defaultValues: {
+            message: "",
+        }
+    })
+
     const {
-        loading: loadingQuery,
-        error,
         data,
-    } = useQuery<MessageByChatSessionIdResponse, MessageByChatSessionIdVariables>(
+        refetch
+    } = useQuery<MessageByChatSessionIdResponse>(
         GET_MESSAGES_BY_CHAT_SESSION_ID,
         {
-            variables: { chat_session_id: chatId },
+            variables: { id: chatId },
             skip: !chatId,
         }
     );
@@ -61,10 +76,82 @@ function ChatbotPage({ params, }: { params: Promise<{ id: string }> }) {
     const handleInformationSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true)
-        const chatId = await startNewChat(name, email, Number(id));
-        setChatId(chatId)
+        const newChatId = await startNewChat(name, email, chatbotId);
+        setChatId(newChatId)
+
+        if (newChatId) {
+            await refetch({ id: newChatId })
+        }
+
         setLoading(false)
         setIsOpen(false)
+    }
+
+    async function onSubmit(values: z.infer<typeof formSchema>) {
+        setLoading(true)
+        const { message: formMessage } = values;
+
+        const message = formMessage;
+        form.reset();
+
+        if (!name || !email) {
+            setIsOpen(true);
+            setLoading(false);
+            return
+        }
+
+        if (!message.trim()) {
+            return
+        }
+
+        const userMessage: Message = {
+            id: crypto.randomUUID(),
+            content: message,
+            created_at: new Date().toISOString(),
+            chat_session_id: chatId,
+            sender: "user",
+        }
+
+        const loadingMessage: Message = {
+            id: crypto.randomUUID(),
+            content: "Thinking...",
+            created_at: new Date().toISOString(),
+            chat_session_id: chatId,
+            sender: "ai",
+        }
+
+        setMessages((prevMessages) => [
+            ...prevMessages,
+            userMessage,
+            loadingMessage
+        ])
+
+        try {
+            const response = await fetch("/api/send-message", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    name: name,
+                    chat_session_id: chatId,
+                    chatbot_id: chatbotId,
+                    content: message,
+                })
+            });
+            const result = await response.json();
+
+            setMessages((prevMessages) =>
+                prevMessages.map((msg) =>
+                    msg.id === loadingMessage.id
+                        ? { ...msg, content: result.content, id: result.id }
+                        : msg
+                )
+            );
+
+        } catch (error) {
+            console.error("Error Sending Message: ", error)
+        }
     }
 
     return (
@@ -134,6 +221,37 @@ function ChatbotPage({ params, }: { params: Promise<{ id: string }> }) {
                     messages={messages}
                     chatbotName={chatBotData?.chatbots.name!}
                 />
+                <Field>
+                    <form
+                        onSubmit={form.handleSubmit(onSubmit)}
+                        className="flex items-start sticky bottom-0 z-50 space-x-4 drop-shadow-lg p-4 bg-gray-100 rounded-md"
+                    >
+                        <Controller
+                            control={form.control}
+                            name="message"
+                            render={({ field }) => (
+                                <FieldGroup className="flex-1">
+                                    <FieldLabel hidden>Message</FieldLabel>
+                                    <FieldContent>
+                                        <Input
+                                            placeholder="Type a message..."
+                                            {...field}
+                                            className="p-8"
+                                        />
+                                    </FieldContent>
+                                </FieldGroup>
+                            )}
+                        />
+
+                        <Button
+                            type="submit"
+                            className="h-full"
+                            disabled={form.formState.isSubmitting || !form.formState.isValid}
+                        >
+                            Send
+                        </Button>
+                    </form>
+                </Field>
             </div>
         </div>
     )
